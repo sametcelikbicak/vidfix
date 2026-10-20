@@ -1,9 +1,13 @@
 # vidfix
 
 [![Stars](https://img.shields.io/github/stars/sametcelikbicak/vidfix?style=social)](https://github.com/sametcelikbicak/vidfix)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Forks](https://img.shields.io/github/forks/sametcelikbicak/vidfix?style=social)](https://github.com/sametcelikbicak/vidfix)
+[![Release](https://img.shields.io/github/v/release/sametcelikbicak/vidfix)](https://github.com/sametcelikbicak/vidfix/releases/latest)
+[![CI](https://github.com/sametcelikbicak/vidfix/actions/workflows/test.yml/badge.svg)](https://github.com/sametcelikbicak/vidfix/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/github/license/sametcelikbicak/vidfix)](LICENSE)
 [![macOS](https://img.shields.io/badge/macOS-11%2B-lightgrey.svg)](https://www.apple.com/macos/)
 [![Linux](https://img.shields.io/badge/Linux-x86_64%2Farm64-lightgrey.svg)](https://www.kernel.org/)
+[![Homebrew](https://img.shields.io/badge/brew-install_vidfix-orange?logo=homebrew)](https://github.com/sametcelikbicak/homebrew-tap)
 
 Diagnose why a video will not play, and fix it in one command.
 
