@@ -1,0 +1,343 @@
+#!/usr/bin/env bash
+# vidfix - diagnose and fix video playback compatibility problems
+# license: MIT
+set -euo pipefail
+
+VERSION="1.0.0"
+PROG="${0##*/}"
+FFMPEG="${FFMPEG:-ffmpeg}"
+
+PRESET="1080p"
+BITRATE=""
+FORCE=0
+DRY_RUN=0
+NO_HW=0
+OUT=""
+OUT_DIR=""
+
+# --- helpers -----------------------------------------------------------------
+
+die() { printf '%s: error: %s\n' "$PROG" "$*" >&2; exit 1; }
+info() { printf '%s\n' "$*"; }
+step() { printf -- '-> %s\n' "$*"; }
+skip() { printf 'SKIPPED: %s\n' "$*"; }
+
+need_ffmpeg() {
+  command -v "$FFMPEG" >/dev/null 2>&1 || die "ffmpeg not found.
+  macOS      : brew install ffmpeg
+  Debian/Ubuntu : sudo apt install ffmpeg"
+}
+
+usage() {
+  cat <<EOF
+$PROG $VERSION - video playback compatibility tool
+
+Usage:
+  $PROG check <file.mp4 | folder>    Diagnose why the video will not play
+  $PROG <file.mp4> [options]         Convert one file  -> <name>_fixed.mp4
+  $PROG <folder> [options]           Convert every video in a folder
+  $PROG --help                       Show this help
+  $PROG --version                    Show version
+
+Options:
+  --preset 720p|1080p|2160p   Output resolution (default: 1080p)
+  --bitrate 20M               Video bitrate (default: depends on preset)
+  --out <file.mp4>            Output path for a single file
+  --out-dir <folder>          Output folder (default: source folder)
+  --force                     Overwrite an existing output file
+  --dry-run                   Print the ffmpeg command, do not encode
+  --no-hw                     Force software encoding (libx264)
+  -h, --help                  Show this help
+
+Install:
+  curl -fsSL https://raw.githubusercontent.com/sametcelikbicak/vidfix/v$VERSION/install.sh | bash
+  brew tap sametcelikbicak/tap && brew trust sametcelikbicak/tap && brew install vidfix
+EOF
+}
+
+# --- media inspection --------------------------------------------------------
+
+P_CODEC=""; P_PROFILE=""; P_PIXFMT=""; P_W=""; P_H=""; P_FPS=""
+P_VBR=""; P_ACODEC=""; P_DURATION=""; P_HAS_VIDEO=0; P_HAS_AUDIO=0
+
+# Reads stream properties with ffmpeg only (ffprobe is not required)
+probe() {
+  local f="$1" out vline aline pairs k v
+  out="$("$FFMPEG" -hide_banner -i "$f" 2>&1 || true)"
+
+  P_CODEC=""; P_PROFILE=""; P_PIXFMT=""; P_W=""; P_H=""; P_FPS=""
+  P_VBR=""; P_ACODEC=""; P_DURATION=""; P_HAS_VIDEO=0; P_HAS_AUDIO=0
+
+  P_DURATION="$(printf '%s\n' "$out" | grep -m1 'Duration:' | sed -E 's/.*Duration: *([0-9:.]+).*/\1/' || true)"
+
+  vline="$(printf '%s\n' "$out" | grep -m1 'Video: ' || true)"
+  if [ -n "$vline" ]; then
+    P_HAS_VIDEO=1
+    P_CODEC="$(printf '%s' "$vline" | sed -E 's/.*Video: *([A-Za-z0-9_]+).*/\1/')"
+    P_PROFILE="$(printf '%s' "$vline" | sed -nE 's/.*Video: *[A-Za-z0-9_]+ *\(([^)]*)\).*/\1/p')"
+    pairs="$(printf '%s' "$vline" | awk -F', ' '{
+      for (i = 1; i <= NF; i++) {
+        g = $i
+        if (g ~ /^[0-9]+x[0-9]+/)                { split(g, b, " "); print "res=" b[1]; continue }
+        if (g ~ / kb\/s/)                        { split(g, a, " "); print "vbr=" a[1]; continue }
+        if (g ~ / fps$/)                         { split(g, a, " "); print "fps=" a[1]; continue }
+        if (g ~ /^[a-z0-9]+\(/ && g !~ /avc1|hev1|hvc1|av01|vp09|mp4a/) {
+          sub(/\(.*/, "", g); print "pix=" g; continue
+        }
+      }
+    }')"
+    while IFS='=' read -r k v; do
+      case "$k" in
+        res) P_W="${v%x*}"; P_H="${v#*x}" ;;
+        pix) P_PIXFMT="$v" ;;
+        vbr) P_VBR="$v" ;;
+        fps) P_FPS="$v" ;;
+      esac
+    done <<EOF2
+$pairs
+EOF2
+  fi
+
+  aline="$(printf '%s\n' "$out" | grep -m1 'Audio: ' || true)"
+  if [ -n "$aline" ]; then
+    P_HAS_AUDIO=1
+    P_ACODEC="$(printf '%s' "$aline" | sed -E 's/.*Audio: *([A-Za-z0-9_]+).*/\1/')"
+  fi
+}
+
+# Actually tries to decode one frame in hardware; the verdict is measured, not guessed
+hw_decode_ok() {
+  local f="$1" o a accels
+  case "$(uname -s)" in
+    Darwin) accels="videotoolbox" ;;
+    *)      accels="vaapi cuda" ;;
+  esac
+  for a in $accels; do
+    "$FFMPEG" -hide_banner -hwaccels 2>/dev/null | grep -q "$a" || continue
+    o="$("$FFMPEG" -hide_banner -v error -hwaccel "$a" -i "$f" -frames:v 1 -f null - 2>&1 || true)"
+    if printf '%s' "$o" | grep -qiE "session not available|hwaccel initialisation returned error|Cannot load|Invalid data"; then
+      continue
+    fi
+    return 0
+  done
+  return 1
+}
+
+# --- diagnostics -------------------------------------------------------------
+
+ISSUES=""
+add_issue() { ISSUES="${ISSUES}${ISSUES:+
+}$1"; }
+
+check_one() {
+  local f="$1"
+  [ -f "$f" ] || die "file not found: $f"
+  probe "$f"
+
+  info "File      : $f"
+  info "Duration  : ${P_DURATION:-unknown}"
+
+  if [ "$P_HAS_VIDEO" -eq 0 ]; then
+    add_issue "no video stream found (the file may be broken)"
+    info "Video     : none"
+  else
+    info "Video     : ${P_CODEC}$( [ -n "$P_PROFILE" ] && printf ' (%s)' "$P_PROFILE") ${P_W}x${P_H} ${P_PIXFMT} ${P_FPS}fps ${P_VBR:-?}kb/s"
+    if [ "$P_HAS_AUDIO" -eq 1 ]; then
+      info "Audio     : ${P_ACODEC}"
+    else
+      info "Audio     : none"
+    fi
+
+    case "$P_PIXFMT" in
+      *422*|*444*) add_issue "4:2:2/4:4:4 chroma - hardware decoders rarely support it" ;;
+    esac
+    case "$P_PIXFMT" in
+      *10le|*10be|*12le|*12be) add_issue "10-bit colour depth - older GPUs cannot decode it" ;;
+    esac
+    case "$P_CODEC" in
+      h264|hevc|vp9|av1|mpeg4) ;;
+      *) add_issue "unsupported codec: $P_CODEC" ;;
+    esac
+    if [ -n "$P_H" ] && [ -n "$P_FPS" ]; then
+      if [ "$P_H" -gt 1080 ] && awk "BEGIN{exit !($P_FPS > 30)}"; then
+        add_issue "${P_H}p/${P_FPS}fps - too heavy for software decoding to keep up"
+      fi
+    fi
+  fi
+
+  if hw_decode_ok "$f"; then
+    info "Hardware  : decoder can handle this file"
+  else
+    info "Hardware  : decoder cannot handle this file (software fallback)"
+  fi
+
+  if [ -z "$ISSUES" ]; then
+    info "Result    : NO PROBLEMS FOUND - this file should play normally"
+    return 0
+  fi
+  info "Problems  :"
+  printf '%s\n' "$ISSUES" | sed 's/^/  - /'
+  info "Suggestion: $PROG \"$f\" --preset $PRESET"
+  return 1
+}
+
+check_cmd() {
+  local p f failed=0
+  [ $# -ge 1 ] || die "check requires a file or a folder"
+  for p in "$@"; do
+    if [ -d "$p" ]; then
+      for f in "$p"/*; do
+        [ -f "$f" ] || continue
+        case "$(printf '%s' "$f" | tr '[:upper:]' '[:lower:]')" in
+          *.mp4|*.mov|*.mkv|*.m4v) check_one "$f" || failed=1; info "" ;;
+          *) ;;
+        esac
+      done
+    else
+      check_one "$p" || failed=1
+    fi
+  done
+  [ "$failed" -eq 0 ]
+}
+
+# --- conversion --------------------------------------------------------------
+
+ENC_ARGS=()
+preset_size() {
+  case "$1" in
+    720p)  echo "1280 720 6M" ;;
+    2160p) echo "3840 2160 40M" ;;
+    *)     echo "1920 1080 12M" ;;
+  esac
+}
+
+pick_encoder() {
+  ENC_ARGS=()
+  if [ "$NO_HW" -eq 1 ]; then
+    ENC_ARGS=(-c:v libx264 -preset veryfast -crf 21)
+    return
+  fi
+  if "$FFMPEG" -hide_banner -encoders 2>/dev/null | grep -q 'h264_videotoolbox'; then
+    ENC_ARGS=(-c:v h264_videotoolbox -b:v "$BITRATE")
+  elif "$FFMPEG" -hide_banner -encoders 2>/dev/null | grep -q 'h264_nvenc' \
+       && command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+    ENC_ARGS=(-c:v h264_nvenc -preset p4 -b:v "$BITRATE")
+  else
+    ENC_ARGS=(-c:v libx264 -preset veryfast -crf 21)
+  fi
+}
+
+convert_one() {
+  local in_file="$1" out_file="$2"
+  local base; base="$(basename "$in_file")"
+  [ -f "$in_file" ] || die "file not found: $in_file"
+
+  if [ -e "$out_file" ] && [ "$FORCE" -eq 0 ]; then
+    skip "$out_file (already exists, use --force to overwrite)"
+    return 0
+  fi
+
+  local W H DEF_BR
+  read -r W H DEF_BR <<EOF2
+$(preset_size "$PRESET")
+EOF2
+  [ -n "$BITRATE" ] || BITRATE="$DEF_BR"
+
+  probe "$in_file"
+  pick_encoder
+
+  local vf
+  vf="scale=w='min(${W},iw)':h='min(${H},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1"
+
+  local cmd=("$FFMPEG" -hide_banner -nostdin -y -i "$in_file" -vf "$vf")
+  cmd+=("${ENC_ARGS[@]}" -pix_fmt yuv420p -profile:v high)
+  if [ "$P_HAS_AUDIO" -eq 1 ]; then
+    cmd+=(-c:a aac -b:a 160k -tag:a mp4a)
+  else
+    cmd+=(-an)
+  fi
+  cmd+=(-tag:v avc1 -movflags +faststart "$out_file")
+
+  step "$base -> $(basename "$out_file")  [${W}x${H} ${BITRATE}]"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    printf '   %s\n' "${cmd[*]}"
+    return 0
+  fi
+  "${cmd[@]}"
+  info "   DONE: $out_file"
+}
+
+convert_cmd() {
+  local p f base out
+  [ $# -ge 1 ] || die "a file or a folder is required"
+
+  for p in "$@"; do
+    if [ -d "$p" ]; then
+      for f in "$p"/*; do
+        [ -f "$f" ] || continue
+        case "$(printf '%s' "$f" | tr '[:upper:]' '[:lower:]')" in
+          *.mp4|*.mov|*.mkv|*.m4v) ;;
+          *) continue ;;
+        esac
+        base="$(basename "$f")"; base="${base%.*}"
+        case "$base" in
+          *_fixed) skip "$f (already converted)" ;;
+          *)
+            out="$(dirname "$f")/${base}_fixed.mp4"
+            [ -n "$OUT_DIR" ] && out="${OUT_DIR}/${base}_fixed.mp4"
+            convert_one "$f" "$out"
+            ;;
+        esac
+      done
+    else
+      base="$(basename "$p")"; base="${base%.*}"
+      out="$(dirname "$p")/${base}_fixed.mp4"
+      [ -n "$OUT" ] && out="$OUT"
+      [ -n "$OUT_DIR" ] && out="${OUT_DIR}/${base}_fixed.mp4"
+      convert_one "$p" "$out"
+    fi
+  done
+}
+
+# --- argument parsing --------------------------------------------------------
+
+main() {
+  need_ffmpeg
+
+  local cmd=""
+  local paths=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      check) cmd="check"; shift ;;
+      convert) cmd="convert"; shift ;;
+      --preset) PRESET="${2:-}"; shift 2 ;;
+      --bitrate) BITRATE="${2:-}"; shift 2 ;;
+      --out) OUT="${2:-}"; shift 2 ;;
+      --out-dir) OUT_DIR="${2:-}"; shift 2 ;;
+      --force) FORCE=1; shift ;;
+      --dry-run) DRY_RUN=1; shift ;;
+      --no-hw) NO_HW=1; shift ;;
+      -h|--help) usage; exit 0 ;;
+      --version) echo "$PROG $VERSION"; exit 0 ;;
+      -*) die "unknown option: $1 (see --help)" ;;
+      *) paths+=("$1"); shift ;;
+    esac
+  done
+
+  case "$PRESET" in
+    720p|1080p|2160p) ;;
+    *) die "invalid preset: $PRESET (720p|1080p|2160p)" ;;
+  esac
+
+  if [ "$cmd" = "check" ]; then
+    check_cmd "${paths[@]+"${paths[@]}"}"
+  elif [ ${#paths[@]} -gt 0 ]; then
+    if [ -n "$OUT_DIR" ]; then mkdir -p "$OUT_DIR"; fi
+    convert_cmd "${paths[@]}"
+  else
+    usage
+    exit 1
+  fi
+}
+
+main "$@"

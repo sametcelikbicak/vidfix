@@ -1,0 +1,16 @@
+# macOS / Linux
+.DS_Store
+Thumbs.db
+
+# converted output
+*_fixed.mp4
+tmp/
+out/
+
+# editors
+.idea/
+.vscode/
+*.swp
+
+# logs
+*.log

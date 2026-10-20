@@ -1,0 +1,71 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: package
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          NAME="vidfix-$VERSION"
+          mkdir -p "$NAME/bin"
+          cp bin/vidfix "$NAME/bin/"
+          cp install.sh README.md README_TR.md LICENSE "$NAME/"
+          tar -czf "$NAME.tar.gz" "$NAME"
+          sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
+          echo "packed $NAME.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: |
+            vidfix-*.tar.gz
+            vidfix-*.tar.gz.sha256
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            vidfix-*.tar.gz
+            vidfix-*.tar.gz.sha256
+          generate_release_notes: true
+
+  update-tap:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: assets
+
+      - name: update homebrew formula
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          SHA="$(sha256sum "assets/vidfix-$VERSION.tar.gz" | awk '{print $1}')"
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "TAP_TOKEN is not configured, skipping the tap update"
+            exit 0
+          fi
+          git clone --depth 1 "https://sametcelikbicak:${TAP_TOKEN}@github.com/sametcelikbicak/homebrew-tap.git" tap
+          cd tap
+          sed -i "s|sha256 \".*\"|sha256 \"$SHA\"|" Formula/vidfix.rb
+          sed -i "s|/v[0-9.]*/vidfix-[0-9.]*\.tar\.gz|/v$VERSION/vidfix-$VERSION.tar.gz|" Formula/vidfix.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/vidfix.rb
+          git commit -m "vidfix $VERSION"
+          git pull --rebase origin main
+          git push
