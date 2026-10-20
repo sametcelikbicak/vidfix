@@ -1,15 +1,23 @@
-# vidfix
+<p align="center">
+  <img src="https://raw.githubusercontent.com/sametcelikbicak/vidfix/main/assets/vidfix_logo.png" alt="VidFix" width="200" height="200">
+</p>
 
-[![Stars](https://img.shields.io/github/stars/sametcelikbicak/vidfix?style=social)](https://github.com/sametcelikbicak/vidfix)
-[![Forks](https://img.shields.io/github/forks/sametcelikbicak/vidfix?style=social)](https://github.com/sametcelikbicak/vidfix)
-[![Release](https://img.shields.io/github/v/release/sametcelikbicak/vidfix)](https://github.com/sametcelikbicak/vidfix/releases/latest)
-[![CI](https://github.com/sametcelikbicak/vidfix/actions/workflows/test.yml/badge.svg)](https://github.com/sametcelikbicak/vidfix/actions/workflows/test.yml)
-[![License: MIT](https://img.shields.io/github/license/sametcelikbicak/vidfix)](LICENSE)
-[![macOS](https://img.shields.io/badge/macOS-11%2B-lightgrey.svg)](https://www.apple.com/macos/)
-[![Linux](https://img.shields.io/badge/Linux-x86_64%2Farm64-lightgrey.svg)](https://www.kernel.org/)
-[![Homebrew](https://img.shields.io/badge/brew-install_vidfix-orange?logo=homebrew)](https://github.com/sametcelikbicak/homebrew-tap)
+<h1 align="center">VidFix</h1>
 
-Diagnose why a video will not play, and fix it in one command.
+<p align="center">
+  <b>Diagnose why a video will not play, and fix it in one command.</b>
+</p>
+
+<p align="center">
+<a href="https://github.com/sametcelikbicak/vidfix"><img src="https://img.shields.io/github/stars/sametcelikbicak/vidfix?style=social" alt="Stars"></a>
+<a href="https://github.com/sametcelikbicak/vidfix"><img src="https://img.shields.io/github/forks/sametcelikbicak/vidfix?style=social" alt="Forks"></a>
+<a href="https://github.com/sametcelikbicak/vidfix/releases/latest"><img src="https://img.shields.io/github/v/release/sametcelikbicak/vidfix" alt="Release"></a>
+<a href="https://github.com/sametcelikbicak/vidfix/actions/workflows/test.yml"><img src="https://github.com/sametcelikbicak/vidfix/actions/workflows/test.yml/badge.svg" alt="CI"></a>
+<a href="LICENSE"><img src="https://img.shields.io/github/license/sametcelikbicak/vidfix" alt="License: MIT"></a>
+<a href="https://www.apple.com/macos/"><img src="https://img.shields.io/badge/macOS-11%2B-lightgrey.svg" alt="macOS"></a>
+<a href="https://www.kernel.org/"><img src="https://img.shields.io/badge/Linux-x86_64%2Farm64-lightgrey.svg" alt="Linux"></a>
+<a href="https://github.com/sametcelikbicak/homebrew-tap"><img src="https://img.shields.io/badge/brew-install_vidfix-orange?logo=homebrew" alt="Homebrew"></a>
+</p>
 
 **🇹🇷 Türkçe: [README_TR.md](README_TR.md)**
 
@@ -33,11 +41,11 @@ Suggestion: vidfix "camera_xavc.mp4" --preset 1080p
 
 A video plays the audio but the picture stays frozen. This is not a player bug, it is a codec-support gap — and it has a very specific shape:
 
-| Symptom | Cause |
-| --- | --- |
-| Sound plays, picture is frozen | The decoder cannot keep up. 4K 10-bit 4:2:2 in software decoding runs at roughly 15 fps on an older CPU |
-| Picture is black, sound is fine | The hardware decoder rejected the chroma or bit-depth profile |
-| "Unsupported codec" error | The codec is not H.264 / HEVC / VP9 / AV1 |
+| Symptom                         | Cause                                                                                                   |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Sound plays, picture is frozen  | The decoder cannot keep up. 4K 10-bit 4:2:2 in software decoding runs at roughly 15 fps on an older CPU |
+| Picture is black, sound is fine | The hardware decoder rejected the chroma or bit-depth profile                                           |
+| "Unsupported codec" error       | The codec is not H.264 / HEVC / VP9 / AV1                                                               |
 
 Camera formats are the usual trigger. Sony XAVC S, Canon XAVC, Panasonic AVCHD-Pro and many drone and phone outputs are **10-bit 4:2:2** (`yuv422p10le`). Almost every laptop GPU — and every consumer player — can decode 8-bit 4:2:0 (`yuv420p`) and nothing else. When the player falls back to software decoding, the picture freezes while the audio keeps running.
 
@@ -97,15 +105,15 @@ The source file is **never** modified. Output is written next to the source as `
 
 ### Options
 
-| Option | Default | Meaning |
-| --- | --- | --- |
-| `--preset 720p\|1080p\|2160p` | `1080p` | Output resolution |
-| `--bitrate 20M` | preset-dependent | Video bitrate (hardware encoders) |
-| `--out <file.mp4>` | `<name>_fixed.mp4` | Output path for a single file |
-| `--out-dir <folder>` | source folder | Where to write the output |
-| `--force` | off | Overwrite an existing output file |
-| `--dry-run` | off | Print the ffmpeg command, do not encode |
-| `--no-hw` | off | Force software encoding (libx264) |
+| Option                        | Default            | Meaning                                 |
+| ----------------------------- | ------------------ | --------------------------------------- |
+| `--preset 720p\|1080p\|2160p` | `1080p`            | Output resolution                       |
+| `--bitrate 20M`               | preset-dependent   | Video bitrate (hardware encoders)       |
+| `--out <file.mp4>`            | `<name>_fixed.mp4` | Output path for a single file           |
+| `--out-dir <folder>`          | source folder      | Where to write the output               |
+| `--force`                     | off                | Overwrite an existing output file       |
+| `--dry-run`                   | off                | Print the ffmpeg command, do not encode |
+| `--no-hw`                     | off                | Force software encoding (libx264)       |
 
 ## How the decision is made
 
